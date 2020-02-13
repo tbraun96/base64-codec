@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use bytes::{Bytes, BytesMut, Buf, BufMut};
+    use bytes::{BytesMut, Buf, BufMut};
     use base64_codec::codec::Base64Codec;
     use futures_codec::{Encoder, Decoder};
 

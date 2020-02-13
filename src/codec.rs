@@ -140,7 +140,7 @@ impl Decoder for Base64Codec {
                             Ok(Some(line))
                         }
 
-                        Err(err) => {
+                        Err(_) => {
                             //println!("Decode Err: {}", err.to_string());
                             //TODO: [ON-RELEASE] remove below to not stop entire program
                             Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Unable to decode inbound packet via base64 algorithm"))
