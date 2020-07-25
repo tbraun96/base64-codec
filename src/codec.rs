@@ -1,7 +1,7 @@
 use std::{io, cmp};
-use bytes::{BufMut, Bytes, BytesMut, Buf};
-use futures_codec::{Encoder, Decoder};
-
+use bytes::{BufMut, BytesMut, Buf, Bytes};
+//use futures_codec::{Encoder, Decoder};
+use tokio_util::codec::{Encoder, Decoder};
 /// for benches irrelevant side note: (unused_results, warnings, unused_features, warnings above)
 /// `codec` contains optimized and unique algorithms for encoding/decoding that aren't present in rust's crate repository (e.g., base64)
 /// A simple `Codec` implementation that splits up data into lines.
@@ -18,6 +18,7 @@ pub struct Base64Codec {
     /// read until a `\n` character is reached.
     max_length: usize,
 
+    min_capacity: usize,
     /// Are we currently discarding the remainder of a line which was over
     /// the length limit?
     is_discarding: bool
@@ -34,9 +35,10 @@ impl Base64Codec{
     /// for information on why this could be a potential security risk.
     ///
     /// [`new_with_max_length`]: #method.new_with_max_length
-    pub fn new() -> Self {
+    pub fn new(min_capacity: usize) -> Self {
         Base64Codec {
             next_index: 0,
+            min_capacity,
             max_length: usize::max_value(),
             is_discarding: false
         }
@@ -60,10 +62,10 @@ impl Base64Codec{
     /// without any `\n` characters, causing unbounded memory consumption.
     ///
     /// [`LengthError`]: ../struct.LengthError
-    pub fn new_with_max_length(max_length: usize) -> Self {
+    pub fn new_with_max_length(max_length: usize, min_capacity: usize) -> Self {
         Base64Codec {
             max_length,
-            ..Base64Codec::new()
+            ..Base64Codec::new(min_capacity)
         }
     }
 
@@ -73,13 +75,13 @@ impl Base64Codec{
     /// use std::usize;
     /// use base64_codec::codec::Base64Codec;
     ///
-    /// let codec = Base64Codec::new();
+    /// let codec = Base64Codec::new(64);
     /// assert_eq!(codec.max_length(), usize::MAX);
     /// ```
     /// ```
     ///
     /// use base64_codec::codec::Base64Codec;
-    /// let codec = Base64Codec::new_with_max_length(256);
+    /// let codec = Base64Codec::new_with_max_length(256, 64);
     /// assert_eq!(codec.max_length(), 256);
     /// ```
     pub fn max_length(&self) -> usize {
@@ -105,13 +107,23 @@ impl Base64Codec{
 }
 
 impl Decoder for Base64Codec {
-    type Item = BytesMut;
+    type Item = Bytes;
     // TODO: in the next breaking change, this should be changed to a custom
     // error type that indicates the "max length exceeded" condition better.
     type Error = io::Error;
 
     fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, io::Error> {
         //println!("[CODEC] RECV {}", buf.len());
+        //println!("CAP: {}", buf.capacity());
+        if buf.capacity() < self.min_capacity {
+            buf.reserve(self.max_length - buf.capacity());
+        }
+
+        if buf.len() > self.min_capacity {
+            println!("[codec] Oversized packet received. Dropping");
+            return Ok(None)
+        }
+
         loop {
             // Determine how far into the buffer we'll search for a newline. If
             // there's no max_length set, we'll read to the end of the buffer.
@@ -137,7 +149,7 @@ impl Decoder for Base64Codec {
 
                     match base64::decode_config_bytes_auto(&mut line, base64::STANDARD_NO_PAD) {
                         Ok(_) => {
-                            Ok(Some(line))
+                            Ok(Some(line.freeze()))
                         }
 
                         Err(_) => {
@@ -166,11 +178,11 @@ impl Decoder for Base64Codec {
     }
 }
 
-impl Encoder for Base64Codec {
-    type Item = Bytes;
+impl Encoder<Bytes> for Base64Codec {
+//    type Item = Bytes;
     type Error = io::Error;
 
-    fn encode(&mut self, line: Self::Item, buf: &mut BytesMut) -> Result<(), io::Error> {
+    fn encode(&mut self, line: Bytes, buf: &mut BytesMut) -> Result<(), io::Error> {
         // Add +1 for the \n
         let line = line.as_ref();
         let expected_max = ((line.len() + 3) * 3 / 4) + 1;
